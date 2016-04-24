@@ -93,12 +93,20 @@ classdef PPrep < handle
         if iscell(x.String)
           for i=1:length(x.String)
             s=x.String{i};
-            y.(s.Name.Text)=s.Val.Text;
+            if isfield(s.Val,'Text')
+              y.(s.Name.Text)=s.Val.Text;
+            else
+              y.(s.Name.Text)='';
+            end
             parsed=parsed+1;
           end
         else
           s=x.String;
-          y.(s.Name.Text)=s.Val.Text;
+          if isfield(s.Val,'Text')
+            y.(s.Name.Text)=s.Val.Text;
+          else
+            y.(s.Name.Text)='';
+          end
           parsed=parsed+1;
         end
       end
@@ -226,8 +234,7 @@ classdef PPrep < handle
   methods
     function obj=PPrep(filename)
       obj.load(filename);
-      obj.analyzepeaks();
-      obj.setuprefs();
+      obj.setuplanes();
     end
     
     
@@ -256,17 +263,6 @@ classdef PPrep < handle
       end
     end
     
-    function parseMethod(obj)
-      s=obj.Method.Settings;
-      obj.lane=[];
-      for i=1:length(s.TargetBPs)
-        obj.lane=[obj.lane,struct('TargetBPs',s.TargetBPs(i),...
-                                  'LaneType',s.LaneType(i),...
-                                  'SigMon',s.SigMon(i),...
-                                  'RefLane',s.RefLane(i))];
-      end
-    end
-      
     function load(obj, filename)
       fileID = fopen(filename,'r');
       % Skip ahead to data array
@@ -279,7 +275,7 @@ classdef PPrep < handle
         end
         if strncmp(line,'***',3)
           section=line(4:end-3);
-          fprintf('Hit %s\n', section');
+          %fprintf('Hit %s\n', section');
           if strcmp(section(end-4:end),'Start')
             assert(isempty(inSection));
             inSection=section(1:end-5);
@@ -314,9 +310,6 @@ classdef PPrep < handle
       obj.IlanemA = cell2mat(dataArray(:, 12:16));
       obj.PauseFlags = dataArray{:, 17};
       obj.Date = datenum(dataArray{:, 18})+datenum(dataArray{:, 19});
-
-      % Setup lanes structure from method in file
-      obj.parseMethod()
     end
 
     function analyzepeaks(obj)
@@ -332,31 +325,16 @@ classdef PPrep < handle
       end
     end
 
-    function setuprefs(obj)
-      ladderbp=[obj.Cassette.Ladder.BP];
-      ladderbp=ladderbp(ladderbp>0);
-      fprintf('Ladder for %s is [%s]\n', obj.Cassette.Cass, sprintf('%.1f ',ladderbp));
-      for i=1:length(obj.lane)
-        ref=obj.lane(i).RefLane;
-        if length(ladderbp)<length(obj.lane(ref).peaks)
-          fprintf('Reference has %d lengths, but found %d peaks\n',length(ladderbp),length(obj.lane(ref).peaks));
-          keyboard
-          return;
-        end
-        obj.lane(i).mdl=struct('timeLEDBP',polyfit(obj.lane(ref).peaks/60,ladderbp(1:length(obj.lane(ref).peaks))',1));
-      end
-    end
-    
     function sz=timeToSize(obj,lane,mins)
     % Compute size in nt given mins of propagation
-    %      sz=interp1(obj.lane{lane}.mdl(:,1),obj.lane{lane}.mdl(:,2),mins,'linear','extrap');
-      sz=exp(interp1(1./obj.lane{lane}.mdl(:,1),log(obj.lane{lane}.mdl(:,2)),1./mins,'linear','extrap'));
+    %      sz=interp1(obj.lane(lane).ledpoints(:,1),obj.lane(lane).ledpoints(:,2),mins,'linear','extrap');
+      sz=exp(interp1(1./obj.lane(lane).ledpoints(:,1),log(obj.lane(lane).ledpoints(:,2)),1./mins,'linear','extrap'));
     end
     
     function mins=sizeToTime(obj,lane,sz)
     % Compute size in nt given mins of propagation
-    %mins=interp1(obj.lane{lane}.mdl(:,2),obj.lane{lane}.mdl(:,1),sz,'linear','extrap');
-      mins=1./interp1(log(obj.lane{lane}.mdl(:,2)),1./obj.lane{lane}.mdl(:,1),log(sz),'linear','extrap');
+    %mins=interp1(obj.lane(lane).ledpoints(:,2),obj.lane(lane).ledpoints(:,1),sz,'linear','extrap');
+      mins=1./interp1(log(obj.lane(lane).ledpoints(:,2)),1./obj.lane(lane).ledpoints(:,1),log(sz),'linear','extrap');
     end
     
     % function plotref(obj)
@@ -408,7 +386,7 @@ classdef PPrep < handle
       
 
       % Mark peaks
-      pks=obj.peaks{lane};
+      pks=obj.lane(lane).peaks;
       for i=1:length(pks)
         t=pks(i)/60;
         h=text(t,obj.IphmA(pks(i),lane),sprintf('%.1f = %.0f',t,obj.timeToSize(lane,t)));
@@ -416,8 +394,8 @@ classdef PPrep < handle
       end
       xlabel('Time (min)');
       ylabel('LED Current (mA)');
-      if isfield(obj.lane{lane},'name')
-        title(sprintf('Lane %d - %s',lane,obj.lane{lane}.name));
+      if isfield(obj.lane(lane),'name')
+        title(sprintf('Lane %d - %s',lane,obj.lane(lane).name));
       else
         title(sprintf('Lane %d',lane));
       end
@@ -437,8 +415,8 @@ classdef PPrep < handle
       axis(c);
 
       % Mark planned elution points in red
-      if isfield(obj.lane{lane},'bandbps')
-        bandbps=obj.lane{lane}.bandbps;
+      if isfield(obj.lane(lane),'bandbps')
+        bandbps=obj.lane(lane).bandbps;
         bandtime=obj.sizeToTime(lane,bandbps);
         for i=1:length(bandbps)
           plot(bandtime(i)*[1,1],[0,bandbps(i)],':r');
@@ -448,14 +426,42 @@ classdef PPrep < handle
       end
     end
     
-    function setupLane(obj,lane,name,reflane,low,high)
-      s=struct('name',name,'reflane',reflane,'elute',obj.Timers([find(obj.LaneState(:,lane)==2,1), find(obj.LaneState(:,lane)==2,1,'last')])/60,'bandbps',[low,high]);
-      fprintf('Setup lane %d to use reference lane %d, range bps=[%d,%d], elute=%.2f:%.2f min\n', lane, s.reflane, s.bandbps,s.elute);
-      % Setup piecewise linear model that maps time (x) to bp (y)
-      s.mdl=obj.lane{reflane}.mdl; 	% Initialize with reference model
-      s.mdl(end+1,:)=[obj.sizeToTime(reflane,low),low];
-      s.mdl(end+1,:)=[(s.elute(2)-s.elute(1))+s.mdl(end,1),high];	  % Elution
-      obj.lane{lane}=s;
+    function setuplanes(obj)
+    % Setup the lanes
+      s=obj.Method.Settings;
+      obj.lane=[];
+      for i=1:length(s.TargetBPs)
+        obj.lane=[obj.lane,struct('Name',s.TargetBPs(i).Comm,...
+                                  'TargetBPs',rmfield(s.TargetBPs(i),'Comm'),...
+                                  'LaneType',s.LaneType(i),...
+                                  'SigMon',s.SigMon(i),...
+                                  'RefLane',s.RefLane(i))];
+      end
+      
+      obj.analyzepeaks();
+      
+      % references
+      ladderbp=[obj.Cassette.Ladder.BP];
+      ladderbp=ladderbp(ladderbp>0);
+      fprintf('Ladder for %s is [%s]\n', obj.Cassette.Cass, sprintf('%.1f ',ladderbp));
+      for i=1:length(obj.lane)
+        ref=obj.lane(i).RefLane;
+        if length(ladderbp)<length(obj.lane(ref).peaks)
+          fprintf('Reference in lane %d has %d lengths, but found %d peaks\n',ref, length(ladderbp),length(obj.lane(ref).peaks));
+          keyboard
+          return;
+        end
+        obj.lane(i).ledpoints=[obj.lane(ref).peaks/60,ladderbp(1:length(obj.lane(ref).peaks))'];
+        obj.lane(i).eluteTime=obj.Timers([find(obj.LaneState(:,i)==2,1), find(obj.LaneState(:,i)==2,1,'last')])/60;
+        if obj.lane(i).TargetBPs.BPpause ~= 0
+          pauseStr=sprintf(', pause at %3.0f bp', obj.lane(i).TargetBPs.BPpause);
+        else
+          pauseStr='';
+        end
+        fprintf('Setup lane %d (%10s) to use reference lane %d, range=[%3.0f,%3.0f] bps, %s, eluted at %.2f:%.2f min\n', i, obj.lane(i).Name,ref, obj.lane(i).TargetBPs.BPstart,obj.lane(i).TargetBPs.BPend,pauseStr,obj.lane(i).eluteTime);
+        obj.lane(i).elutePoints(1,:)=[obj.lane(i).eluteTime(1),obj.lane(i).TargetBPs.BPstart];
+        obj.lane(i).elutePoints(end+1,:)=[obj.lane(i).eluteTime(2),obj.lane(i).TargetBPs.BPend];
+      end
     end
   end
 end
