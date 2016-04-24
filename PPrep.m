@@ -10,8 +10,6 @@ classdef PPrep < handle
       IlanemA;
       PauseFlags;
       Date;
-      sections;
-      peaks;
       lane;
       Cassette;
       Config;
@@ -45,31 +43,37 @@ classdef PPrep < handle
         assert(length(x.DBL)==prod(dimsize));
         y=[];
         for i=1:length(x.DBL)
-          y=[y,str2double(x.DBL{i}.Val)];
+          y=[y,str2double(x.DBL{i}.Val.Text)];
         end
       elseif isfield(x,'I32')
         assert(length(x.I32)==prod(dimsize));
         y=[];
         for i=1:length(x.I32)
-          y=[y,str2double(x.I32{i}.Val)];
+          y=[y,str2double(x.I32{i}.Val.Text)];
         end
       elseif isfield(x,'U16')
         assert(length(x.U16)==prod(dimsize));
         y=[];
         for i=1:length(x.U16)
-          y=[y,str2double(x.U16{i}.Val)];
+          y=[y,str2double(x.U16{i}.Val.Text)];
         end
       elseif isfield(x,'Boolean')
         assert(length(x.Boolean)==prod(dimsize));
         y=[];
         for i=1:length(x.Boolean)
-          y=[y,str2double(x.Boolean{i}.Val)~=0];
+          y=[y,str2double(x.Boolean{i}.Val.Text)~=0];
         end
       elseif isfield(x,'EL')
         assert(length(x.EL)==prod(dimsize));
-        y=[];
+        y={};
         for i=1:length(x.EL)
-          y=[y,str2double(x.EL{i}.Val)];
+          y{i}=x.EL{i}.Choice{str2double(x.EL{i}.Val.Text)}.Text;
+        end
+      elseif isfield(x,'EW')
+        assert(length(x.EW)==prod(dimsize));
+        y={};
+        for i=1:length(x.EW)
+          y{i}=x.EW{i}.Choice{str2double(x.EW{i}.Val.Text)}.Text;
         end
       else
         assert(false);
@@ -176,6 +180,19 @@ classdef PPrep < handle
           parsed=parsed+1;
         end
       end
+      if isfield(x,'EW')
+        if iscell(x.EW)
+          for i=1:length(x.EW)
+            s=x.EW{i};
+            y.(s.Name.Text)=s.Choice{str2double(s.Val.Text)}.Text;
+            parsed=parsed+1;
+          end
+        else
+          s=x.EW;
+          y.(s.Name.Text)=s.Choice{str2double(s.Val.Text)}.Text;
+          parsed=parsed+1;
+        end
+      end
       if isfield(x,'Cluster')
         if iscell(x.Cluster)
           for i=1:length(x.Cluster)
@@ -204,170 +221,50 @@ classdef PPrep < handle
       end
       assert(parsed==numelts);
     end
-    
-    function y=simplify(x)
-      if iscell(x)
-        if isfield(x{1},'Name')
-          y=struct;
-          for i=1:length(x)
-            if isfield(x{i},'Name') && isfield(x{i}.Name,'Text')
-              nm=x{i}.Name.Text;
-            else
-              nm='Unknown';
-            end
-            if isfield(y,nm)
-              y.(nm)=[y.(nm),PPrep.simplify(x{i})];
-            else
-              y.(nm)=PPrep.simplify(x{i});
-            end
-          end
-        else
-          y={};
-          for i=1:length(x)
-            y{i}=PPrep.simplify(x{i});
-          end
-        end
-      elseif ~isstruct(x)
-        y=x;
-      else
-        fn=fieldnames(x);
-        y=struct;
-        for i=1:length(fn)
-          if isfield(x.(fn{i}),'Name')
-            nm=x.(fn{i}).Name.Text;
-            nm=nm(nm~=' ');
-          elseif strcmp(fn{i},'Name')
-            continue;
-          elseif strcmp(fn{i},'NumElts')
-            continue;
-          else
-            nm=fn{i};
-          end
-          if isfield(y,nm)
-            y.(nm)(end+1)=PPrep.simplify(x.(fn{i}));
-          else
-            y.(nm)=PPrep.simplify(x.(fn{i}));
-
-          end
-        end
-      end
-      if isfield(y,'Val') && length(fieldnames(y))==1
-        y=y.Val;
-      end
-      if isfield(y,'Text') && length(fieldnames(y))==1
-        y=y.Text;
-      end
-      if isfield(y,'DBL')
-        fn=fieldnames(y.DBL);
-        for i=1:length(fn)
-          y.(fn{i})=str2double(y.DBL.(fn{i}));
-        end
-        y=rmfield(y,'DBL');
-      end
-      if isfield(y,'U16')
-        fn=fieldnames(y.U16);
-        for i=1:length(fn)
-          y.(fn{i})=y.U16.(fn{i});
-        end
-        y=rmfield(y,'U16');
-      end
-      if isfield(y,'U32')
-        fn=fieldnames(y.U32);
-        for i=1:length(fn)
-          y.(fn{i})=y.U32.(fn{i});
-        end
-        y=rmfield(y,'U32');
-      end
-      if isfield(y,'Boolean')
-        fn=fieldnames(y.Boolean);
-        for i=1:length(fn)
-          y.(fn{i})=y.Boolean.(fn{i})~='0';
-        end
-        y=rmfield(y,'Boolean');
-      end
-      if isfield(y,'Cluster')
-        keyboard
-        fn=fieldnames(y.Cluster);
-        for i=1:length(fn)
-          y.(fn{i})=y.Cluster.(fn{i});
-        end
-        y=rmfield(y,'Cluster');
-      end
-      if isfield(y,'Array')
-        keyboard
-        fn=fieldnames(y.Array);
-        for i=1:length(fn)
-          y.(fn{i})=y.Array.(fn{i});
-        end
-        y=rmfield(y,'Array');
-      end
-    end
   end
 
   methods
-    function obj=PPrep(filename,reflane,geltype)
-      if nargin<3
-        geltype=2;
-      end
-      if geltype==2
-        refsizes=[20,75,150,300,600];
-      elseif geltype==3
-        refsizes=[25,50,75,100];
-      else
-        error('geltype must be 2 or 3');
-      end
-      obj.sections=containers.Map();
+    function obj=PPrep(filename)
       obj.load(filename);
-      keys=obj.sections.keys;
-      for i=1:length(keys)
-        s=obj.getSection(keys{i});
-        if strcmp(keys{i},'Method')
-          obj.parseMethod(s);
+      obj.analyzepeaks();
+      obj.setuprefs();
+    end
+    
+    
+    function xml=getSection(obj,sectionData)
+      if sectionData(1)=='<'
+        % XML
+        tmpfile=tempname();
+        fd=fopen(tmpfile,'w');
+        fprintf(fd,'%s',sectionData);
+        fclose(fd);
+        s=xml2struct(tmpfile);
+        if isfield(s,'Cluster')
+          xml=obj.xmlCluster(s.Cluster);
+        elseif isfield(s,'Array')
+          xml=obj.xmlArray(s.Array);
+        elseif isfield(s,'String')
+          xml=s.String.Val.Text;
         else
-          obj.(keys{i})=s;
+          assert(false);
         end
-      end
-      if nargin<2
-        reflane=1;
-      end
-      obj.setref(reflane,refsizes);
-    end
-    
-    
-    function xml=getSection(obj,section)
-      tmpfile=tempname();
-      fd=fopen(tmpfile,'w');
-      fprintf(fd,'%s',obj.sections(section));
-      fclose(fd);
-      s=xml2struct(tmpfile);
-      %xml=obj.simplify(s);
-      if isfield(s,'Cluster')
-        xml=obj.xmlCluster(s.Cluster);
-      elseif isfield(s,'Array')
-        xml=obj.xmlArray(s.Array);
-      else
-        assert(false);
-      end
         
-      delete(tmpfile);
+        delete(tmpfile);
+      else
+        % Literal
+        xml=sectionData;
+      end
     end
     
-    function parseMethod(obj,s)
-      m=s.Process;
-      c=m.Settings.TargetBPs.LaneParams;
-      for i=1:length(c)
-        fn=fieldnames(c);
-        for j=1:length(fn)
-          obj.lane{i}.(fn{j})=c.(fn{j});
-        end
-        obj.lane{i}.LaneType=m.Settings.LaneType.EL.Ref(i).Choice{str2double(m.Settings.LaneType.EL.Ref(i).Val)};
-        obj.lane{i}.SigMon=m.Settings.SigMon.Lane5(i);
-        obj.lane{i}.RefLane=str2double(m.Settings.RefLane.RefLane(i));
+    function parseMethod(obj)
+      s=obj.Method.Settings;
+      obj.lane=[];
+      for i=1:length(s.TargetBPs)
+        obj.lane=[obj.lane,struct('TargetBPs',s.TargetBPs(i),...
+                                  'LaneType',s.LaneType(i),...
+                                  'SigMon',s.SigMon(i),...
+                                  'RefLane',s.RefLane(i))];
       end
-      m.Settings=rmfield(m.Settings,{'TargetBPs','LaneType','SigMon','RefLane'});
-      obj.Method=m.Settings;
-      obj.Method.Cassette=m.Cassette;
-      keyboard;
     end
       
     function load(obj, filename)
@@ -387,7 +284,7 @@ classdef PPrep < handle
             assert(isempty(inSection));
             inSection=section(1:end-5);
           elseif strcmp(section(end-2:end),'End')
-            obj.sections(inSection)=secdata;
+            obj.(inSection)=obj.getSection(secdata);
             assert(~isempty(inSection));
             inSection=[];
             secdata=[];
@@ -417,7 +314,12 @@ classdef PPrep < handle
       obj.IlanemA = cell2mat(dataArray(:, 12:16));
       obj.PauseFlags = dataArray{:, 17};
       obj.Date = datenum(dataArray{:, 18})+datenum(dataArray{:, 19});
-      obj.peaks={};
+
+      % Setup lanes structure from method in file
+      obj.parseMethod()
+    end
+
+    function analyzepeaks(obj)
       for lane=1:size(obj.IphmA,2)
         y=obj.IphmA(:,lane);
         t=obj.Timers(isfinite(y));	% Remove nans;
@@ -426,20 +328,23 @@ classdef PPrep < handle
         [~,pks]=findpeaks(y,'MinPeakProminence',prom,'MinPeakWidth',5);
         peaktimes=t(pks);
         peaktimes=peaktimes(peaktimes>5*60);	% Skip early peaks
-        obj.peaks{lane}=peaktimes;
+        obj.lane(lane).peaks=peaktimes;
       end
-      obj.lane={};
     end
 
-    function setref(obj,lane,refsizes)
-      if length(refsizes)<length(obj.peaks{lane})
-        fprintf('Reference has %d lengths, but have %d peaks\n',length(refsizes),length(obj.peaks{lane}));
-        keyboard
-        return;
+    function setuprefs(obj)
+      ladderbp=[obj.Cassette.Ladder.BP];
+      ladderbp=ladderbp(ladderbp>0);
+      fprintf('Ladder for %s is [%s]\n', obj.Cassette.Cass, sprintf('%.1f ',ladderbp));
+      for i=1:length(obj.lane)
+        ref=obj.lane(i).RefLane;
+        if length(ladderbp)<length(obj.lane(ref).peaks)
+          fprintf('Reference has %d lengths, but found %d peaks\n',length(ladderbp),length(obj.lane(ref).peaks));
+          keyboard
+          return;
+        end
+        obj.lane(i).mdl=struct('timeLEDBP',polyfit(obj.lane(ref).peaks/60,ladderbp(1:length(obj.lane(ref).peaks))',1));
       end
-      s=struct('name','Ref','reflane',lane);
-      s.mdl=[obj.peaks{lane}/60,refsizes(1:length(obj.peaks{lane}))'];
-      obj.lane{lane}=s;
     end
     
     function sz=timeToSize(obj,lane,mins)
