@@ -430,6 +430,7 @@ classdef PPrep < handle
         end
       end
       c=axis;
+      c(4)=max(obj.IphmA(:,lane))*1.2;
       % Mark pause times in red
       pausetimes=obj.Timers(find(obj.PauseFlags))/60;
       for i=1:length(pausetimes)
@@ -439,6 +440,7 @@ classdef PPrep < handle
       v=(obj.LaneState(:,lane)/2 + 0.1)/1.2 * (c(4)-c(3)) + c(3);
       elutetimes=obj.Timers(obj.LaneState(:,lane)==2)/60;
       h=plot(obj.Timers/60,v,'-g');
+      axis(c);
       
 
       % Mark peaks
@@ -458,7 +460,6 @@ classdef PPrep < handle
       
       % Set time axis so all lanes are the same
       c(2)=max(obj.Timers(any(isfinite(obj.IphmA')))/60);
-      c(4)=c(4)+(c(4)-c(3));
       axis(c);
 
       % Plot reference on right axis
@@ -473,6 +474,20 @@ classdef PPrep < handle
       axis(c);
     end
     
+    function ploteluteshift(obj)
+    % Plot separation from LED to elute
+      setfig('eluteshift');clf;
+      sz=20:200;
+      for i=1:length(obj.lane)
+        tled=obj.sizeToTime(i,sz);
+        telute=obj.sizeToTime(i,sz,1);
+        plot(sz,telute-tled);
+        hold on;
+      end
+      xlabel('BP');
+      ylabel('T(elute)-T(LED) (min)');
+    end
+        
     function setuplanes(obj)
     % Setup the lanes
       s=obj.Method.Settings;
@@ -483,6 +498,21 @@ classdef PPrep < handle
                                   'LaneType',s.LaneType(i),...
                                   'SigMon',s.SigMon(i),...
                                   'RefLane',s.RefLane(i))];
+      end
+
+      % Check for saturation of LED -- shows up as negative values for Iph
+      for i=1:length(obj.lane)
+        sat=find(obj.IphmA(:,i)<0);
+        nsat=length(sat);
+        if nsat>0
+          groups=[0,find(diff(sat)>5),nsat];
+          for k=2:length(groups)
+            max=nanmax(obj.IphmA(:,i));
+            satg=sat(groups(k-1)+1:groups(k));
+            obj.IphmA(satg,i)=max*(1+0.1*triang(length(satg)));	% Slight ramp up in middle so peak gets centered, plot is clearer
+            fprintf('Lane %d LED saturated at %.2f-%.2f min; setting to triangle from %.1f to %.1f\n', i, obj.Timers(satg([1,end]))/60,max,max*1.1);
+          end
+        end
       end
       
       obj.analyzepeaks();
@@ -505,13 +535,16 @@ classdef PPrep < handle
           return;
         end
         obj.lane(i).eluteTime=obj.Timers([find(obj.LaneState(:,i)==2,1), find(obj.LaneState(:,i)==2,1,'last')])/60;
-        l=obj.lane(i);
-        if l.TargetBPs.BPpause ~= 0
-          pauseStr=sprintf(' pause at %3.0f bp,', l.TargetBPs.BPpause);
-        else
-          pauseStr='';
+        if obj.LaneState(end,i)==2
+          fprintf('Run stopped at %.2f min before lane %d finished elution\n', obj.Timers(end)/60, i);
+          obj.lane(i).eluteTime(2)=nan;
         end
-        fprintf('Setup lane %d (%10s) to use reference lane %d, range=[%3.0f,%3.0f] bps,%s eluted at %.2f:%.2f min\n', i, l.Name,ref, l.TargetBPs.BPstart,l.TargetBPs.BPend,pauseStr,l.eluteTime);
+        obj.lane(i).pauseTime=obj.Timers(find(obj.PauseFlags==10^(7-i)))/60;
+        if isempty(obj.lane(i).pauseTime)
+          obj.lane(i).pauseTime=nan;
+        end
+        l=obj.lane(i);
+        fprintf('Lane %d (%10s), Ref: lane %d, Elute [%3.0f,%3.0f,%3.0f] bps at [%.2f, %.2f, %.2f] min\n', i, l.Name,ref, l.TargetBPs.BPstart,l.TargetBPs.BPpause,l.TargetBPs.BPend,l.eluteTime(1),l.pauseTime,l.eluteTime(2));
         
         % Setup calibration for lane
         % Creates elutemap(:,2) and ledmap(:,2), where map(:,1)=real time in minutes, and map(:,2)=bp
@@ -520,9 +553,23 @@ classdef PPrep < handle
         at=obj.adjTime(i,t);	% Adjusted time (elapsed time as if it was never eluting)
 
         lmdl=polyfit(obj.adjTime(ref,peaks/60),ladderbp(1:length(peaks))',2);	% Quadratic fit
+        obj.lane(i).lmdl=lmdl;
         obj.lane(i).ledmap=[t;polyval(lmdl,at)]';
-        emdl=polyfit(obj.adjTime(i,l.eluteTime(1:2)),[l.TargetBPs.BPstart;l.TargetBPs.BPend],1);	% Linear fit
+        if all(isfinite(l.eluteTime))
+          emdl=polyfit(obj.adjTime(i,l.eluteTime(1:2)),[l.TargetBPs.BPstart;l.TargetBPs.BPend],1);	% Linear fit
+        elseif isfinite(l.pauseTime)
+          emdl=polyfit(obj.adjTime(i,[l.eluteTime(1);l.pauseTime]),[l.TargetBPs.BPstart;l.TargetBPs.BPpause],1);	% Linear fit
+        else
+          fprintf('Not enough data to model elutions for lane %d\n', i);
+        end
+        obj.lane(i).emdl=emdl;
         obj.lane(i).elutemap=[t;polyval(emdl,at)]';
+      end
+
+      % Display manual pauses
+      manualPauses=find(obj.PauseFlags==1);
+      if ~isempty(manualPauses)
+        fprintf('Manual pauses at [%s] min\n', sprintf('%.2f ',obj.Timers(manualPauses)/60));
       end
     end
     
@@ -535,17 +582,13 @@ classdef PPrep < handle
       for i=1:length(obj.lane)
         l=obj.lane(i);
         szs=[l.TargetBPs.BPstart,l.TargetBPs.BPpause,l.TargetBPs.BPend];
-        ptime=obj.Timers(find(obj.PauseFlags==10^(7-i)))/60;
-        if isempty(ptime)
-          ptime=nan;
-        end
-        actuals=[l.eluteTime(1),ptime,l.eluteTime(2)];
+        actuals=[l.eluteTime(1),l.pauseTime,l.eluteTime(2)];
         et=[];
         for j=1:length(actuals)
           et(j)=obj.sizeToTime(i,szs(j),1);
         end
         err=et-actuals;
-        fprintf('Lane %d elute [%3.0f %3.0f %3.0f] @ [%.2f %.2f %.2f] -> computed = [%.2f %.2f %.2f] err=[%5.2f %5.2f %5.2f]\n', i, szs, actuals, et,err);
+        fprintf('Lane %d elute [%3.0f %3.0f %3.0f] @ [%5.2f %5.2f %5.2f] -> computed = [%5.2f %5.2f %5.2f] err=[%5.2f %5.2f %5.2f]\n', i, szs, actuals, et,err);
         plot(actuals,err,'o-');
         allbp=[allbp,szs(1)];
         allactual=[allactual,actuals(1)];
