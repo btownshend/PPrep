@@ -20,7 +20,6 @@ classdef PPrep < handle
       Timestamp;
       Versions;
       eluteRate;
-      eluteScale;
       options;
   end
 
@@ -239,8 +238,7 @@ classdef PPrep < handle
       defaults=struct('ignorepeaks',[]);
       args=processargs(defaults,varargin);
       obj.options=args;
-      obj.eluteRate=0.7450;   % Relative speed DNA moves through gel when eluting (slower,<1)
-      obj.eluteScale=0.9289;     % At time t*eluteScale, the DNA currently at elution was at the LED
+      obj.eluteRate=0.763;   % Relative speed DNA moves through gel when eluting (slower,<1)
       obj.load(filename);
       obj.setuplanes();
     end
@@ -361,42 +359,36 @@ classdef PPrep < handle
       t(elutesel)=t(elutesel)-(t(elutesel)-obj.lane(lane).eluteTime(2))*(1-obj.eluteRate);
     end
 
-      
     function sz=timeToSize(obj,lane,mins,atElute)
     % Compute size in nt given mins of propagation
-    %      sz=interp1(obj.lane(lane).ledpoints(:,1),obj.lane(lane).ledpoints(:,2),mins,'linear','extrap');
       if nargin<4
         atElute=0;
       end
-      t=obj.adjTime(lane,mins);
       if atElute
-        t=t*obj.eluteScale;
+        map=obj.lane(lane).elutemap;
+      else
+        map=obj.lane(lane).ledmap;
       end
-      sz=exp(interp1(1./obj.lane(lane).ledpoints(:,1),log(obj.lane(lane).ledpoints(:,2)),1./t,'linear','extrap'));
+      sz=interp1(map(:,1),map(:,2),mins,'linear','extrap');
+      if any(isnan(sz))
+        keyboard
+      end
     end
     
-    function [t,refsused]=sizeToTime(obj,lane,sz,atElute,realTimeLinear)
+    function t=sizeToTime(obj,lane,sz,atElute)
     % Compute size in nt given mins of propagation
-    %mins=interp1(obj.lane(lane).ledpoints(:,2),obj.lane(lane).ledpoints(:,1),sz,'linear','extrap');
       if nargin<4
         atElute=0;
       end
-      if nargin<5
-        realTimeLinear=0;  % This is 0 to ignore, or the maximum time up to which to use reference peaks
-      end
-      if realTimeLinear
-        sel=obj.lane(lane).ledpoints(:,1)<realTimeLinear;
-        t=interp1(obj.lane(lane).ledpoints(sel,2),obj.lane(lane).ledpoints(sel,1),sz,'linear','extrap');
-        refsused=obj.lane(lane).ledpoints(sel,2);
-      else
-        t=1./interp1(log(obj.lane(lane).ledpoints(:,2)),1./obj.lane(lane).ledpoints(:,1),log(sz),'linear','extrap');
-        refsused=obj.lane(lane).ledpoints(:,2);
-        
-      end
       if atElute
-        t=t/obj.eluteScale;
+        map=obj.lane(lane).elutemap;
+      else
+        map=obj.lane(lane).ledmap;
       end
-      t=obj.realTime(lane,t);
+      t=interp1(map(:,2),map(:,1),sz,'linear','extrap');
+      if any(isnan(t))
+        keyboard
+      end
     end
     
     % function plotref(obj)
@@ -476,9 +468,9 @@ classdef PPrep < handle
       plot(c(1):c(2),obj.timeToSize(lane,c(1):c(2),1));
       ylabel('Size (bp)');
       c=axis;
+      c(1)=30;
       c(3:4)=[0,200];
       axis(c);
-
     end
     
     function setuplanes(obj)
@@ -500,7 +492,8 @@ classdef PPrep < handle
       ladderbp=ladderbp(ladderbp>0);
       fprintf('Ladder for %s is [%s]\n', obj.Cassette.Cass, sprintf('%.1f ',ladderbp));
       for i=1:length(obj.lane)
-        ref=obj.lane(i).RefLane;
+        l=obj.lane(i);
+        ref=l.RefLane;
         peaks=obj.lane(ref).peaks;
         if ~isempty(obj.options.ignorepeaks)
           sel=setdiff(1:length(peaks),obj.options.ignorepeaks);
@@ -512,17 +505,25 @@ classdef PPrep < handle
           return;
         end
         obj.lane(i).eluteTime=obj.Timers([find(obj.LaneState(:,i)==2,1), find(obj.LaneState(:,i)==2,1,'last')])/60;
-        obj.lane(i).ledpoints=[obj.adjTime(ref,peaks/60),ladderbp(1:length(peaks))'];
-        if obj.lane(i).TargetBPs.BPpause ~= 0
-          pauseStr=sprintf(', pause at %3.0f bp', obj.lane(i).TargetBPs.BPpause);
+        l=obj.lane(i);
+        if l.TargetBPs.BPpause ~= 0
+          pauseStr=sprintf(' pause at %3.0f bp,', l.TargetBPs.BPpause);
         else
           pauseStr='';
         end
-        fprintf('Setup lane %d (%10s) to use reference lane %d, range=[%3.0f,%3.0f] bps, %s, eluted at %.2f:%.2f min\n', i, obj.lane(i).Name,ref, obj.lane(i).TargetBPs.BPstart,obj.lane(i).TargetBPs.BPend,pauseStr,obj.lane(i).eluteTime);
-        obj.lane(i).elutePoints(1,:)=[obj.lane(i).eluteTime(1),obj.lane(i).TargetBPs.BPstart];
-        obj.lane(i).elutePoints(end+1,:)=[obj.lane(i).eluteTime(2),obj.lane(i).TargetBPs.BPend];
-      end
+        fprintf('Setup lane %d (%10s) to use reference lane %d, range=[%3.0f,%3.0f] bps,%s eluted at %.2f:%.2f min\n', i, l.Name,ref, l.TargetBPs.BPstart,l.TargetBPs.BPend,pauseStr,l.eluteTime);
+        
+        % Setup calibration for lane
+        % Creates elutemap(:,2) and ledmap(:,2), where map(:,1)=real time in minutes, and map(:,2)=bp
+        % These can be then used with interp1 to convert between time and bp at either location
+        t=(0:obj.Timers(end))/60;
+        at=obj.adjTime(i,t);	% Adjusted time (elapsed time as if it was never eluting)
 
+        lmdl=polyfit(obj.adjTime(ref,peaks/60),ladderbp(1:length(peaks))',2);	% Quadratic fit
+        obj.lane(i).ledmap=[t;polyval(lmdl,at)]';
+        emdl=polyfit(obj.adjTime(i,l.eluteTime(1:2)),[l.TargetBPs.BPstart;l.TargetBPs.BPend],1);	% Linear fit
+        obj.lane(i).elutemap=[t;polyval(emdl,at)]';
+      end
     end
     
     function verify(obj)
@@ -539,16 +540,12 @@ classdef PPrep < handle
           ptime=nan;
         end
         actuals=[l.eluteTime(1),ptime,l.eluteTime(2)];
-        et=[];refsused={};
+        et=[];
         for j=1:length(actuals)
-          [et(j),refsused{j}]=obj.sizeToTime(i,szs(j),1,actuals(j)-0.25);
+          et(j)=obj.sizeToTime(i,szs(j),1);
         end
         err=et-actuals;
-        fprintf('Lane %d elute [%3.0f %3.0f %3.0f] @ [%.2f %.2f %.2f] -> computed = [%.2f %.2f %.2f] err=[%5.2f %5.2f %5.2f] Refs used=[', i, szs, actuals, et,err);
-        for j=1:length(actuals)
-          fprintf('{%s} ',sprintf('%.0f ',refsused{j}));
-        end
-        fprintf(']\n');
+        fprintf('Lane %d elute [%3.0f %3.0f %3.0f] @ [%.2f %.2f %.2f] -> computed = [%.2f %.2f %.2f] err=[%5.2f %5.2f %5.2f]\n', i, szs, actuals, et,err);
         plot(actuals,err,'o-');
         allbp=[allbp,szs(1)];
         allactual=[allactual,actuals(1)];
