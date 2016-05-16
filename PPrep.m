@@ -529,6 +529,10 @@ classdef PPrep < handle
       for i=1:length(obj.lane)
         l=obj.lane(i);
         ref=l.RefLane;
+        if (ref==0)
+          fprintf('Lane %d had no reference lane -- skipping it\n', i);
+          continue;
+        end
         peaks=obj.lane(ref).peaks;
         if ~isempty(obj.options.ignorepeaks)
           sel=setdiff(1:length(peaks),obj.options.ignorepeaks);
