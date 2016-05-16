@@ -323,11 +323,16 @@ classdef PPrep < handle
         y=obj.IphmA(:,lane);
         t=obj.Timers(isfinite(y));	% Remove nans;
         y=y(isfinite(y));
-        prom=(max(y)-min(y))/20;
-        [~,pks]=findpeaks(y,'MinPeakProminence',prom,'MinPeakWidth',5,'MinPeakDistance',20);
-        peaktimes=t(pks);
-        peaktimes=peaktimes(peaktimes>5*60);	% Skip early peaks
-        obj.lane(lane).peaks=peaktimes;
+        if length(y)<20
+          fprintf('Not enough LED data in lane %d to find peaks\n', lane);
+          obj.lane(lane).peaks=[];
+        else
+          prom=(max(y)-min(y))/20;
+          [~,pks]=findpeaks(y,'MinPeakProminence',prom,'MinPeakWidth',5,'MinPeakDistance',20);
+          peaktimes=t(pks);
+          peaktimes=peaktimes(peaktimes>5*60);	% Skip early peaks
+          obj.lane(lane).peaks=peaktimes;
+        end
       end
     end
 
