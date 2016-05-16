@@ -531,6 +531,8 @@ classdef PPrep < handle
         ref=l.RefLane;
         if (ref==0)
           fprintf('Lane %d had no reference lane -- skipping it\n', i);
+          obj.lane(i).eluteTime=[nan,nan];
+          obj.lane(i).pauseTime=nan;
           continue;
         end
         peaks=obj.lane(ref).peaks;
@@ -590,6 +592,9 @@ classdef PPrep < handle
       allactual=[];allbp=[];allcomp=[];
       for i=1:length(obj.lane)
         l=obj.lane(i);
+        if l.ref==0
+          continue;
+        end
         szs=[l.TargetBPs.BPstart,l.TargetBPs.BPpause,l.TargetBPs.BPend];
         actuals=[l.eluteTime(1),l.pauseTime,l.eluteTime(2)];
         et=[];
