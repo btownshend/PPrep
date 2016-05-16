@@ -592,7 +592,7 @@ classdef PPrep < handle
       allactual=[];allbp=[];allcomp=[];
       for i=1:length(obj.lane)
         l=obj.lane(i);
-        if l.ref==0
+        if l.RefLane==0
           continue;
         end
         szs=[l.TargetBPs.BPstart,l.TargetBPs.BPpause,l.TargetBPs.BPend];
